@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Unity.Assertions;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
+using Unity.Jobs;
 
 namespace Unity.Entities
 {
@@ -231,18 +232,62 @@ namespace Unity.Entities
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         public void AssertEntitiesExist(Entity* entities, int count)
         {
-            for (var i = 0; i < count; i++)
-            {
-                var entity = entities + i;
-
+            int errorIndex = -1;
+            new AssertEntitiesExistJob {
+                Entities = entities,
+                EntityCount = count,
+                ErrorIndex = &errorIndex,
+                EntitiesCapacity = EntitiesCapacity,
+                EntityInChunkByEntity = m_EntityInChunkByEntity,
+                VersionByEntity = m_VersionByEntity,
+            }.Run();
+            if (errorIndex != -1) {
+                var entity = entities + errorIndex;
                 ValidateEntity(*entity);
-
                 int index = entity->Index;
                 var exists = m_VersionByEntity[index] == entity->Version &&
                     m_EntityInChunkByEntity[index].Chunk != null;
                 if (!exists)
                     throw new ArgumentException(
                         "All entities passed to EntityManager must exist. One of the entities has already been destroyed or was never created.");
+            }
+        }
+
+        [Burst.BurstCompile]
+        struct AssertEntitiesExistJob : IJob
+        {
+            [NativeDisableUnsafePtrRestriction]
+            public EntityInChunk* EntityInChunkByEntity;
+            [NativeDisableUnsafePtrRestriction]
+            public int* VersionByEntity;
+            [NativeDisableUnsafePtrRestriction]
+            public int* ErrorIndex;
+            [NativeDisableUnsafePtrRestriction]
+            public Entity* Entities;
+            public int EntityCount;
+            public int EntitiesCapacity;
+
+            public void Execute()
+            {
+                var count = EntityCount;
+                var entities = Entities;
+                var capacity = (uint) EntitiesCapacity;
+                for (var i = 0; i < count; i++)
+                {
+                    var entity = entities[i];
+
+                    if (entity.Index < 0 || (uint)entity.Index >= capacity) {
+                        *ErrorIndex = i;
+                        break;
+                    }
+
+                    int index = entity.Index;
+                    var exists = VersionByEntity[index] == entity.Version && EntityInChunkByEntity[index].Chunk != null;
+                    if (!exists) {
+                        *ErrorIndex = i;
+                        break;
+                    }
+                }
             }
         }
 
@@ -299,6 +344,19 @@ namespace Unity.Entities
                 throw new InvalidOperationException("The entity does not exist");
 
             AssertCanAddComponent(GetArchetype(entity), componentType);
+        }
+
+        [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
+        public void AssertCanAddComponent(NativeList<EntityBatchInChunk> entitiesInChunk, ComponentType componentType) {
+            Archetype* lastArchetype = null;
+            for (int i = 0, n = entitiesInChunk.Length; i < n; i++) {
+                var batch = entitiesInChunk[i];
+                var archetype = batch.Chunk->Archetype;
+                if (archetype != lastArchetype) {
+                    AssertCanAddComponent(archetype, componentType);
+                    lastArchetype = archetype;
+                }
+            }
         }
 
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]

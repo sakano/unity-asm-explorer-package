@@ -1012,6 +1012,7 @@ namespace Unity.Entities
             return CreateEntityBatchList(entities, ComponentOperation.RemoveComponent, componentType, out entityBatchList);
         }
 
+        [BurstCompile]
         struct SortEntityInChunk : IJob
         {
             public NativeArray<EntityInChunk> EntityInChunks;

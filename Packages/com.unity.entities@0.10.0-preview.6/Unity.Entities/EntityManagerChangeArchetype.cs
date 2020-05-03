@@ -332,15 +332,28 @@ namespace Unity.Entities
             if (entities.Length == 0)
                 return;
 
-            for (int i = 0; i < entities.Length; i++)
-            {
-                ecs->AssertCanAddComponent(entities[i], componentType);
+            bool useBatches = entities.Length <= 10;
+            NativeList<EntityBatchInChunk> entityBatchList = default;
+            if (entities.Length > 10) {
+                useBatches = ecs->CreateEntityBatchListForAddComponent(entities, componentType, out entityBatchList);
             }
 
+            if (useBatches) {
+                using (new Profiling.ProfilerMarker("Exists").Auto())
+                    ecs->AssertEntitiesExist((Entity*)entities.GetUnsafeReadOnlyPtr(), entities.Length);
+                using (new Profiling.ProfilerMarker("CanAdd").Auto())
+                    ecs->AssertCanAddComponent(entityBatchList, componentType);
+            } else {
+                for (int i = 0; i < entities.Length; i++)
+                {
+                    ecs->AssertCanAddComponent(entities[i], componentType);
+                }
+            }
+            
             BeforeStructuralChange();
             var archetypeChanges = ecs->BeginArchetypeChangeTracking();
 
-            if (entities.Length <= 10)
+            if (!useBatches)
             {
                 for (int i = 0; i < entities.Length; i++)
                 {
@@ -350,21 +363,8 @@ namespace Unity.Entities
             }
             else
             {
-                NativeList<EntityBatchInChunk> entityBatchList;
-                var batchesValid = ecs->CreateEntityBatchListForAddComponent(entities, componentType, out entityBatchList);
-                if (!batchesValid)
-                {
-                    for (int i = 0; i < entities.Length; i++)
-                    {
-                        var entity = entities[i];
-                        StructuralChange.AddComponentEntity(ecs, &entity, componentType.TypeIndex);
-                    }
-                }
-                else
-                {
-                    StructuralChange.AddComponentEntitiesBatch(ecs, (UnsafeList*)NativeListUnsafeUtility.GetInternalListDataPtrUnchecked(ref entityBatchList), componentType.TypeIndex);
-                    entityBatchList.Dispose();
-                }
+                StructuralChange.AddComponentEntitiesBatch(ecs, (UnsafeList*)NativeListUnsafeUtility.GetInternalListDataPtrUnchecked(ref entityBatchList), componentType.TypeIndex);
+                entityBatchList.Dispose();
             }
 
             ecs->EndArchetypeChangeTracking(archetypeChanges, access->EntityQueryManager);
